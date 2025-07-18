@@ -7,56 +7,54 @@ import threading
 
 # ---------------- FUNÇÕES DE CÁLCULO ------------------
 
-def calcula_media_diaria(df):
+def agrupar_por_data(df):
     """
-    Calcula a média diária de umidade para cada profundidade.
+    Agrupa os dados por data e remove a hora, garantindo que seja um formato de data sem hora.
     """
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.normalize()  # Normaliza as datas
-
-    profundidades = [20, 40, 60]
-    for prof in profundidades:
-        u_col = f'U{prof}'
-        if u_col in df.columns:
-            # Calcula a média para cada dia e profundidade
-            df[u_col] = df.groupby('Data')[u_col].transform('mean')  
-
-    df = df.drop_duplicates(subset=['Data'])  # Remove duplicatas para manter uma linha por data
+    df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.normalize()  # Normaliza a data
     return df
 
-def detectar_eventos_de_baixa_umidade(df, umidade_limite=0.360, dias_consecutivos=4):
+def detectar_eventos_baixa_umidade(df, umidade_limite=0.360, dias_consecutivos=4):
     """
-    Detecta eventos com umidade abaixo do limite (0.360) e agrupa sequências consecutivas de dias.
+    Detecta eventos de baixa umidade, considerando pelo menos 'dias_consecutivos' dias consecutivos.
     """
-    eventos = {}
+    eventos = []
     
     profundidades = [20, 40, 60]
+    periodos = ['Seco', 'Umido']
     
     for prof in profundidades:
         u_col = f'U{prof}'
         if u_col not in df.columns:
             continue
         
-        # Identificar os dias em que a umidade é abaixo do limite
-        df['Evento'] = df[u_col] < umidade_limite
-        
-        # Marcar sequências de dias consecutivos
-        df['Consecutivo'] = (df['Evento'] != df['Evento'].shift()).cumsum()
-        
-        # Filtrar eventos com pelo menos 4 dias consecutivos
-        eventos[prof] = df.groupby('Consecutivo').filter(
-            lambda x: len(x) >= dias_consecutivos and x['Evento'].all()
-        )
-    
+        for periodo in periodos:
+            df_periodo = df[df['Periodo'] == periodo]
+            
+            # Identificar os dias em que a umidade é abaixo do limite
+            df_periodo['Evento'] = df_periodo[u_col] < umidade_limite
+            
+            # Marcar sequências de dias consecutivos
+            df_periodo['Consecutivo'] = (df_periodo['Evento'] != df_periodo['Evento'].shift()).cumsum()
+
+            # Filtrar eventos com pelo menos 4 dias consecutivos
+            eventos_ano_periodo = df_periodo.groupby('Consecutivo').filter(
+                lambda x: len(x) >= dias_consecutivos and x['Evento'].all()
+            )
+            
+            # Armazenar eventos por profundidade e período
+            eventos.append((prof, periodo, eventos_ano_periodo))
+
     return eventos
 
-def calcula_isv(eventos):
+def calcular_isv(eventos):
     """
-    Calcula o ISV (Índice de Sequência de Baixa Umidade) com base nos eventos detectados.
+    Calcula o ISV com base nos eventos detectados.
     """
     resultados = []
     
-    for prof, df_eventos in eventos.items():
-        nver = len(df_eventos)  # Número de eventos
+    for prof, periodo, df_eventos in eventos:
+        nver = len(df_eventos['Consecutivo'].unique())  # Número de eventos
         dmax = df_eventos['Data'].max() - df_eventos['Data'].min()  # Duração do maior evento
         dver = len(df_eventos)  # Soma das durações dos eventos (número de dias com eventos)
         
@@ -64,6 +62,7 @@ def calcula_isv(eventos):
         isv = nver + ((1 / (1 + (0.0163 * dmax.days**2)**2.26))**0.17) - 0.001 * dver
         resultados.append({
             'Profundidade': prof,
+            'Periodo': periodo,
             'nver': nver,
             'dmax': dmax.days,  # Convertendo de timedelta para dias
             'dver': dver,
@@ -72,18 +71,18 @@ def calcula_isv(eventos):
     
     return pd.DataFrame(resultados)
 
-def calcula_isv_completo(df):
+def calcular_isv_completo(df):
     """
-    Função que integra todos os passos: média diária, detecção de eventos e cálculo do ISV.
+    Função que integra todos os passos: agrupar por data, detecção de eventos e cálculo do ISV.
     """
-    # Passo 1: Calcular a média diária da umidade
-    df_media_diaria = calcula_media_diaria(df)
+    # Passo 1: Agrupar por data
+    df = agrupar_por_data(df)
     
-    # Passo 2: Detectar eventos de baixa umidade (sequências de pelo menos 4 dias consecutivos)
-    eventos = detectar_eventos_de_baixa_umidade(df_media_diaria)
+    # Passo 2: Determinar os eventos de baixa umidade (sequências de pelo menos 4 dias consecutivos)
+    eventos = detectar_eventos_baixa_umidade(df)
     
     # Passo 3: Calcular o ISV
-    resultado_isv = calcula_isv(eventos)
+    resultado_isv = calcular_isv(eventos)
     
     return resultado_isv
 
@@ -121,7 +120,7 @@ if uploaded_file is not None:
     # Processar os dados e calcular o ISV
     resultados_isv = []
     for nome_df, df in planilhas.items():
-        res = calcula_isv_completo(df)
+        res = calcular_isv_completo(df)
         if res is not None and not res.empty:
             res['Origem'] = nome_df
             resultados_isv.append(res)

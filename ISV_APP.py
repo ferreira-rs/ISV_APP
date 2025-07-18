@@ -11,18 +11,16 @@ def calcula_media_diaria(df):
     """
     Calcula a média diária de umidade para cada profundidade.
     """
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.normalize()
-    
-    # Calcular a média diária para cada profundidade
+    df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.normalize()  # Normaliza as datas
+
     profundidades = [20, 40, 60]
     for prof in profundidades:
         u_col = f'U{prof}'
         if u_col in df.columns:
-            df[u_col] = df.groupby('Data')[u_col].transform('mean')  # Média por data
+            # Calcula a média para cada dia e profundidade
+            df[u_col] = df.groupby('Data')[u_col].transform('mean')  
 
-    # Agora vamos filtrar os dados para manter apenas a média diária
-    df = df.drop_duplicates(subset=['Data'])  # Mantemos apenas a linha única por data
-    
+    df = df.drop_duplicates(subset=['Data'])  # Remove duplicatas para manter uma linha por data
     return df
 
 def detectar_eventos_de_baixa_umidade(df, umidade_limite=0.360, dias_consecutivos=4):
@@ -44,7 +42,7 @@ def detectar_eventos_de_baixa_umidade(df, umidade_limite=0.360, dias_consecutivo
         # Marcar sequências de dias consecutivos
         df['Consecutivo'] = (df['Evento'] != df['Evento'].shift()).cumsum()
         
-        # Filtrar eventos de pelo menos 4 dias consecutivos
+        # Filtrar eventos com pelo menos 4 dias consecutivos
         eventos[prof] = df.groupby('Consecutivo').filter(
             lambda x: len(x) >= dias_consecutivos and x['Evento'].all()
         )
@@ -62,7 +60,7 @@ def calcula_isv(eventos):
         dmax = df_eventos['Data'].max() - df_eventos['Data'].min()  # Duração do maior evento
         dver = len(df_eventos)  # Soma das durações dos eventos (número de dias com eventos)
         
-        # Calcular o ISV
+        # Calcular o ISV com a fórmula fornecida
         isv = nver + ((1 / (1 + (0.0163 * dmax.days**2)**2.26))**0.17) - 0.001 * dver
         resultados.append({
             'Profundidade': prof,

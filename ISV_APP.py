@@ -5,131 +5,94 @@ from io import BytesIO
 import os
 import threading
 
-# ---------------- FUNÇÕES DE CÁLCULO ------------------
+# ---------------- FUNÇÃO ISV ------------------
 
-# Função para agrupar por data e criar as colunas de mês, ano e período
-def agrupar_por_data(df):
-    df = df.copy()
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.normalize()  # Normaliza a data
-    df['Mes'] = df['Data'].dt.month
-    df['Ano'] = df['Data'].dt.year
-    df['Periodo'] = np.where(df['Mes'].isin([10, 11, 12, 1, 2, 3]), 'Umido', 'Seco')
-    df['AnoRef'] = np.where(df['Mes'].isin([1, 2, 3]), df['Ano'] - 1, df['Ano'])
-    return df
+def calcular_ISV_por_profundidade(dados, coluna_umidade, umid_limite=0.360):
+    dados["Data"] = pd.to_datetime(dados["Data"], errors='coerce')
+    dados[coluna_umidade] = dados[coluna_umidade].replace(0, np.nan)
 
-# Função que detecta eventos de baixa umidade
-def detectar_eventos_baixa_umidade(df, umidade_limite=0.360, dias_consecutivos=4):
-    eventos = []
-    
-    profundidades = [20, 40, 60]
-    periodos = ['Seco', 'Umido']
-    
-    for prof in profundidades:
-        u_col = f'U{prof}'
-        
-        # Verificar se a coluna existe
-        if u_col not in df.columns:
-            print(f"Coluna {u_col} não encontrada no DataFrame. Pulando essa profundidade.")
-            continue
-        
-        for periodo in periodos:
-            df_periodo = df[df['Periodo'] == periodo]
-            
-            # Identificar os dias em que a umidade é abaixo do limite
-            df_periodo['Evento'] = df_periodo[u_col] < umidade_limite
-            
-            # Marcar sequências de dias consecutivos
-            df_periodo['Consecutivo'] = (df_periodo['Evento'] != df_periodo['Evento'].shift()).cumsum()
+    dados_diarios = (
+        dados.groupby("Data")[coluna_umidade]
+        .mean()
+        .reset_index(name="Umedia")
+    )
+    dados_diarios["mes"] = dados_diarios["Data"].dt.month
+    dados_diarios["ano_ciclo"] = np.where(
+        dados_diarios["mes"].isin([1, 2, 3]),
+        dados_diarios["Data"].dt.year - 1,
+        dados_diarios["Data"].dt.year
+    )
+    dados_diarios["periodo"] = np.where(
+        dados_diarios["mes"].isin([10, 11, 12, 1, 2, 3]),
+        "umido",
+        "seco"
+    )
 
-            # Filtrar eventos com pelo menos 4 dias consecutivos
-            eventos_ano_periodo = df_periodo.groupby('Consecutivo').filter(
-                lambda x: len(x) >= dias_consecutivos and x['Evento'].all()
-            )
-            
-            # Armazenar eventos por profundidade e período
-            eventos.append((prof, periodo, eventos_ano_periodo))
-
-    return eventos
-
-# Função que calcula o ISV com base nos eventos detectados
-def calcular_isv(eventos):
     resultados = []
-    
-    for prof, periodo, df_eventos in eventos:
-        if df_eventos.empty:
-            continue
-        
-        nver = len(df_eventos['Consecutivo'].unique())  # Número de eventos
-        dmax = df_eventos['Data'].max() - df_eventos['Data'].min()  # Duração do maior evento
-        dver = len(df_eventos)  # Soma das durações dos eventos (número de dias com eventos)
-        ano = df_eventos['AnoRef'].iloc[0]  # Ano de referência do evento (pode variar entre os eventos)
 
-        # Calcular o ISV com a fórmula fornecida
-        isv = nver + ((1 / (1 + (0.0163 * dmax.days**2)**2.26))**0.17) - 0.001 * dver
+    for (ano_ciclo, periodo), grupo in dados_diarios.groupby(["ano_ciclo", "periodo"]):
+        grupo = grupo.sort_values("Data").copy()
+        grupo["abaixo_limite"] = (grupo["Umedia"] < umid_limite).astype(int)
+
+        # Run-length encoding
+        run_values = grupo["abaixo_limite"].values
+        diffs = np.diff(np.concatenate(([0], run_values, [0])))
+        run_starts = np.where(diffs == 1)[0]
+        run_ends = np.where(diffs == -1)[0]
+        comprimentos = run_ends - run_starts
+        valores = run_values[run_starts]
+
+        eventos = pd.DataFrame({"comprimento": comprimentos, "valor": valores})
+        eventos_veranico = eventos[(eventos["valor"] == 1) & (eventos["comprimento"] >= 4)]
+
+        nver = len(eventos_veranico)
+        dver = eventos_veranico["comprimento"].sum()
+        dmax = eventos_veranico["comprimento"].max() if nver > 0 else 0
+
+        ISV = nver + ((1 / (1 + (0.0163 * dmax ** 2) ** 2.26)) ** 0.17) - 0.001 * dver
+
         resultados.append({
-            'Ano': ano,  # Adicionando o ano
-            'Profundidade': prof,
-            'Periodo': periodo,
-            'nver': nver,
-            'dmax': dmax.days,  # Convertendo de timedelta para dias
-            'dver': dver,
-            'ISV': isv
+            "ano_ciclo": ano_ciclo,
+            "periodo": periodo,
+            "nver": nver,
+            "dver": dver,
+            "dmax": dmax,
+            "ISV": ISV,
+            "profundidade": coluna_umidade
         })
-    
+
     return pd.DataFrame(resultados)
 
-# Função que calcula o ISV por ano e período
-def calcula_isv_por_ano_periodo(df, nome_df):
-    df = agrupar_por_data(df)  # Aplica o agrupamento por data
-    # Detecta eventos de baixa umidade
-    eventos = detectar_eventos_baixa_umidade(df, umidade_limite=0.360, dias_consecutivos=4)
-    
-    # Calcula o ISV com base nos eventos
-    resultado_isv = calcular_isv(eventos)
-    
-    if resultado_isv is not None and not resultado_isv.empty:
-        resultado_isv['Origem'] = nome_df
-        return resultado_isv
-    else:
-        return None
-
-# Função para calcular o ISV por várias planilhas
-def calcula_isv_varias_planilhas(planilhas):
+def calcula_ISV_em_planilha(df, nome_df, profundidades=["U20", "U40", "U60"]):
     resultados = []
-    for nome_df, df in planilhas.items():
-        resultado_isv = calcula_isv_por_ano_periodo(df, nome_df)
-        
-        if resultado_isv is not None:
-            resultados.append(resultado_isv)
+    for coluna in profundidades:
+        if coluna in df.columns:
+            res = calcular_ISV_por_profundidade(df, coluna)
+            res["Origem"] = nome_df
+            resultados.append(res)
+    return pd.concat(resultados, ignore_index=True) if resultados else None
 
-    if resultados:
-        return pd.concat(resultados, ignore_index=True)
-    else:
-        return None
+def calcula_ISV_varias_planilhas(planilhas):
+    resultados = []
+    for nome, df in planilhas.items():
+        res = calcula_ISV_em_planilha(df, nome)
+        if res is not None:
+            resultados.append(res)
+    return pd.concat(resultados, ignore_index=True) if resultados else None
 
-# Função para exportar resultados para Excel
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name="Resultados")
+        df.to_excel(writer, index=False, sheet_name="ISV_Resultados")
     return output.getvalue()
 
 # ---------------- INTERFACE STREAMLIT ------------------
 
-st.set_page_config(page_title="Índice Microclimático", layout="wide")
-
-# Exibe o logo
-st.image("IEMS_LOGO.png", width=80)  # ajuste o width como quiser
-
-st.title("Calculadora de Índices Microclimáticos do Solo")
+st.set_page_config(page_title="Cálculo do ISV", layout="wide")
+st.image("IEMS_LOGO.png", width=80)
+st.title("Calculadora de ISV (Índice de Seca ou Veranico)")
 
 uploaded_file = st.file_uploader("Envie seu arquivo Excel com várias abas", type=["xlsx"])
-
-st.sidebar.header("Parâmetros para cálculo do ISV")
-
-# Parâmetros para o cálculo do ISV (se necessário)
-umidade_limite = st.sidebar.slider("Limite de umidade para eventos", 0.0, 1.0, 0.360)
-dias_consecutivos = st.sidebar.slider("Número de dias consecutivos", 1, 10, 4)
 
 if uploaded_file is not None:
     xls = pd.ExcelFile(uploaded_file)
@@ -137,7 +100,7 @@ if uploaded_file is not None:
     st.write(f"Abas encontradas: {abas}")
     planilhas = {aba: xls.parse(aba) for aba in abas}
 
-    resultados_isv = calcula_isv_varias_planilhas(planilhas)
+    resultados_isv = calcula_ISV_varias_planilhas(planilhas)
 
     if resultados_isv is not None and not resultados_isv.empty:
         st.subheader("Resultados do ISV")
@@ -155,14 +118,12 @@ if uploaded_file is not None:
 else:
     st.info("Faça upload do arquivo Excel para iniciar o cálculo.")
 
-# --- Botão para encerrar o aplicativo ---
+# Botão para encerrar o app
 def fechar_app():
-    def delayed_shutdown():
-        import time
-        time.sleep(1)
-        os._exit(0)
-    threading.Thread(target=delayed_shutdown).start()
+    import time
+    time.sleep(1)
+    os._exit(0)
 
 if st.button("🚪 Encerrar aplicativo"):
     st.warning("Encerrando o aplicativo...")
-    fechar_app()
+    threading.Thread(target=fechar_app).start()

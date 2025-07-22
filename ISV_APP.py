@@ -8,7 +8,7 @@ import threading
 # ---------------- FUNÇÃO ISV ------------------
 
 def calcular_ISV_por_profundidade(dados, coluna_umidade, umid_limite=0.360):
-    dados["Data"] = pd.to_datetime(dados["Data"], errors='coerce')
+    dados["Data"] = pd.to_datetime(dados["Data"], errors='coerce').dt.normalize()
     dados[coluna_umidade] = dados[coluna_umidade].replace(0, np.nan)
 
     dados_diarios = (

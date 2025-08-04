@@ -44,9 +44,19 @@ def calcular_ISV_por_profundidade(dados, coluna_umidade, umid_limite=0.360, dias
             "ISV": ISV
         }])
 
-    resultado = dados_diarios.groupby(["ano_ciclo", "periodo"]).apply(calcular_ISV_grupo).reset_index(drop=True)
+    agrupado = dados_diarios.groupby(["ano_ciclo", "periodo"])
+
+    resultados = []
+    for (ano, periodo), grupo in agrupado:
+        res = calcular_ISV_grupo(grupo)
+        res["ano_ciclo"] = ano
+        res["periodo"] = periodo
+        resultados.append(res)
+
+    resultado = pd.concat(resultados, ignore_index=True)
     resultado["profundidade"] = coluna_umidade
     return resultado
+
 
 # ---------------- FUNÇÃO PARA VÁRIAS PLANILHAS ----------------
 
@@ -123,3 +133,4 @@ def fechar_app():
 if st.button("🚪 Encerrar aplicativo"):
     st.warning("Encerrando o aplicativo...")
     fechar_app()
+

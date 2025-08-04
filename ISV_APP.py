@@ -106,7 +106,12 @@ if uploaded_file is not None:
         dias_evento=dias_evento
     )
 
-    if resultados_isv is not None and not resultados_isv.empty:
+        if resultados_isv is not None and not resultados_isv.empty:
+        # Reorganizar colunas
+        resultados_isv = resultados_isv.rename(columns={"profundidade": "prof"})
+        ordem_colunas = ["ano_ciclo", "periodo", "prof", "Origem", "ISV", "nver", "dmax", "dver"]
+        resultados_isv = resultados_isv[ordem_colunas]
+
         st.subheader("📊 Resultados do ISV")
         st.dataframe(resultados_isv)
 
@@ -133,4 +138,5 @@ def fechar_app():
 if st.button("🚪 Encerrar aplicativo"):
     st.warning("Encerrando o aplicativo...")
     fechar_app()
+
 

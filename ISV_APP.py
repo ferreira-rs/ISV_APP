@@ -106,10 +106,8 @@ if uploaded_file is not None:
         dias_evento=dias_evento
     )
 
-        if resultados_isv is not None and not resultados_isv.empty:
-        # Reorganizar colunas
-        resultados_isv = resultados_isv.rename(columns={"profundidade": "prof"})
-        ordem_colunas = ["ano_ciclo", "periodo", "prof", "Origem", "ISV", "nver", "dmax", "dver"]
+    if resultados_isv is not None and not resultados_isv.empty:
+        ordem_colunas = ["ano_ciclo", "periodo", "profundidade", "Origem", "ISV", "nver", "dmax", "dver"]
         resultados_isv = resultados_isv[ordem_colunas]
 
         st.subheader("📊 Resultados do ISV")
@@ -127,6 +125,7 @@ if uploaded_file is not None:
 else:
     st.info("📁 Faça upload de um arquivo Excel com os dados.")
 
+
 # --------- Encerramento opcional ---------
 def fechar_app():
     def delayed_shutdown():
@@ -138,5 +137,6 @@ def fechar_app():
 if st.button("🚪 Encerrar aplicativo"):
     st.warning("Encerrando o aplicativo...")
     fechar_app()
+
 
 
